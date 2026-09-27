@@ -112,6 +112,28 @@ Aurora cores mix `tint → spectral` at `aur × 0.70`, so the brightest rays go
 near-white while the body keeps the violet cast. **Do not introduce green** —
 the palette stays achromatic with spectral tint.
 
+### Pointer reaction (hover interactivity)
+
+Two uniforms drive it: `mouse` (smoothed pointer in shader uv-space) and
+`mforce` (0…1 influence) = `presence × (0.30 + 0.70 × energy)`.
+
+| Effect | Construction | Constant |
+|---|---|---|
+| Depth parallax | `par = mouse × mforce × 0.02` — stars take `×0.5`, aurora `×1.0`, Earth `×0.85` | max ≈ 18px lean @1080p |
+| Cursor halo | `exp(-dist × 11.0) × mforce`, composited *before* the Earth mask so the planet occludes it | weight `×0.10` |
+| Ray boost | cursor field feeds the curtain band: `smoothstep(0.45, 0.80, curtains + rays×0.20 + mg×0.35)` | local band coverage swells while sweeping |
+| Core flare | aurora cores gain `aur × mg × 0.35` | transient, only near the pointer |
+
+JS side: position smoothed at τ ≈ 100ms, presence τ ≈ 170ms; sweep energy
+saturates after roughly a third of a screen-height of travel and decays at
+τ ≈ 450ms; `pointerdown` injects an instant pulse. Leaving the window fades
+influence to zero (the glow dissipates in place, it does not jump to center).
+Cost: one `exp` + scalar math — **noise budget stays 12 taps**.
+Under `prefers-reduced-motion` the field snaps to the pointer with a constant
+`0.30 × presence` glow (no energy ramp); while paused, pointer reaction is
+frozen with the rest of the scene. Initial state (no pointer yet) renders
+identically to the non-interactive shader.
+
 ### Shader performance rules (hard constraints)
 - `hash` is sin-free (Hoskins-style). Never reintroduce `fract(sin(dot(…)))` —
   it ran ~88× per pixel.
@@ -147,6 +169,9 @@ on 1× displays — below that, sharpness loss outweighs the gain.
 | `.hud-toggle` | same ghost surface, radius 4px | bg `0.2`, fg `#fff` | bg `0.06`, fg `--accent-active` | 2px spectral ring |
 
 - Foreground only ever moves *toward* white on dark — contrast never drops in a state.
+- **Scene reaction:** the canvas responds to the pointer — halo, ray boost, and
+  parallax per §5.1. The CTA additionally lifts `translateY(-1px)` on hover
+  (150ms, `transform` in its transition list) and settles on `:active`.
 - Touch targets ≥ 44px (`min-height` on CTA, toggle, status chip).
 - CTA is the single primary action; the HUD toggle is a sharp micro utility and
   doubles as the WCAG 2.2.2 pause control for ambient motion.

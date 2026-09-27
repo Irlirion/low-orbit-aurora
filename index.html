@@ -258,7 +258,8 @@ body::before {
   transition:
     background-color var(--motion-fast) var(--ease-standard),
     color var(--motion-fast) var(--ease-standard),
-    border-color var(--motion-fast) var(--ease-standard);
+    border-color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
 }
 .btn-ghost {
   margin-top: var(--space-8);
@@ -272,10 +273,12 @@ body::before {
 .btn-ghost:hover {
   background: rgba(240, 240, 250, 0.2);
   color: var(--accent-hover);
+  transform: translateY(-1px);
 }
 .btn-ghost:active {
   background: rgba(240, 240, 250, 0.06);
   color: var(--accent-active);
+  transform: translateY(0);
 }
 .btn:focus-visible {
   outline: none;
@@ -362,6 +365,8 @@ body.gl-failed .gl-fallback { display: block; }
   out vec4 o;
   uniform vec2 res;
   uniform float t;
+  uniform vec2 mouse;
+  uniform float mforce;
 
   float hash(vec2 p){
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -398,27 +403,34 @@ body.gl-failed .gl-fallback { display: block; }
     vec3 spectral = vec3(0.9412, 0.9412, 0.9804); /* #f0f0fa */
     vec3 tint     = vec3(0.50, 0.56, 1.0);         /* blue-violet spectral tint */
 
+    /* pointer reaction — depth parallax offsets + cursor influence field */
+    vec2 par = mouse * mforce * 0.02;
+    vec2 uvStar = uv + par * 0.5;
+    vec2 uvAur  = uv + par;
+    vec2 uvEar  = uv + par * 0.85;
+    float mg = exp(-length(uv - mouse) * 11.0) * mforce;
+
     /* deep-space base + faint haze (single noise tap) */
     vec3 col = vec3(0.0);
     float haze = noise(uv*1.3 + vec2(time*0.010, time*0.004));
     col += vec3(0.040, 0.045, 0.085) * haze * haze;
 
     /* starfield, two parallax layers */
-    float st = starLayer(uv, 46.0, 0.950, 1.0) * 1.0
-             + starLayer(uv + vec2(37.2, 11.9), 92.0, 0.976, 0.75);
+    float st = starLayer(uvStar, 46.0, 0.950, 1.0) * 1.0
+             + starLayer(uvStar + vec2(37.2, 11.9), 92.0, 0.976, 0.75);
 
     /* aurora curtains */
-    float warp = fbm4(vec2(uv.x*1.15 + time*0.020, time*0.030));
-    float curtains = fbm4(vec2(uv.x*2.5 + warp*1.9, uv.y*0.45 - time*0.016));
-    float rays = noise(vec2((uv.x + warp*0.35)*24.0, time*0.06 + uv.y*1.4));
-    float band = smoothstep(0.45, 0.80, curtains + rays*0.20);
-    float vert = smoothstep(-0.34, -0.10, uv.y) * (1.0 - smoothstep(0.14, 0.52, uv.y));
-    float striate = 0.50 + 0.50 * noise(vec2((uv.x + warp*0.4)*34.0, time*0.05));
+    float warp = fbm4(vec2(uvAur.x*1.15 + time*0.020, time*0.030));
+    float curtains = fbm4(vec2(uvAur.x*2.5 + warp*1.9, uvAur.y*0.45 - time*0.016));
+    float rays = noise(vec2((uvAur.x + warp*0.35)*24.0, time*0.06 + uvAur.y*1.4));
+    float band = smoothstep(0.45, 0.80, curtains + rays*0.20 + mg*0.35);
+    float vert = smoothstep(-0.34, -0.10, uvAur.y) * (1.0 - smoothstep(0.14, 0.52, uvAur.y));
+    float striate = 0.50 + 0.50 * noise(vec2((uvAur.x + warp*0.4)*34.0, time*0.05));
     float aur = clamp(band * vert * striate, 0.0, 1.0);
 
     /* second, thinner band below the main curtain */
-    float band2 = smoothstep(0.62, 0.95, noise(vec2(uv.x*3.2 - warp*1.3 + 41.0, uv.y*0.6 + time*0.012)));
-    float vert2 = smoothstep(-0.30, -0.20, uv.y) * (1.0 - smoothstep(-0.08, 0.06, uv.y));
+    float band2 = smoothstep(0.62, 0.95, noise(vec2(uvAur.x*3.2 - warp*1.3 + 41.0, uvAur.y*0.6 + time*0.012)));
+    float vert2 = smoothstep(-0.30, -0.20, uvAur.y) * (1.0 - smoothstep(-0.08, 0.06, uvAur.y));
     float aur2 = band2 * vert2;
 
     /* stars sit behind the curtains */
@@ -428,8 +440,12 @@ body.gl-failed .gl-fallback { display: block; }
     col += mix(tint, spectral, clamp(aur*0.70, 0.0, 1.0)) * aur;
     col += mix(tint, spectral, 0.40) * aur2 * 0.4;
 
+    /* spectral cursor halo — swells while the pointer sweeps */
+    col += mix(tint, spectral, 0.55) * mg * 0.10;
+    col += mix(tint, spectral, 0.50) * aur * mg * 0.35;
+
     /* Earth limb — black silhouette with spectral atmosphere rim */
-    float ed = length(uv - vec2(0.0, -2.2)) - 1.85; /* <0 inside Earth */
+    float ed = length(uvEar - vec2(0.0, -2.2)) - 1.85; /* <0 inside Earth */
     float inside = 1.0 - smoothstep(-0.004, 0.004, ed);
     col = mix(col, vec3(0.0), inside);
     float outside = 1.0 - inside;
@@ -456,7 +472,7 @@ body.gl-failed .gl-fallback { display: block; }
     return s;
   }
 
-  let prog, uRes, uT;
+  let prog, uRes, uT, uMouse, uForce;
   try {
     prog = gl.createProgram();
     gl.attachShader(prog, compile(gl.VERTEX_SHADER, vert));
@@ -468,6 +484,8 @@ body.gl-failed .gl-fallback { display: block; }
     gl.useProgram(prog);
     uRes = gl.getUniformLocation(prog, 'res');
     uT = gl.getUniformLocation(prog, 't');
+    uMouse = gl.getUniformLocation(prog, 'mouse');
+    uForce = gl.getUniformLocation(prog, 'mforce');
   } catch (err) {
     statusEl.textContent = 'Shader error';
     toggleEl.style.display = 'none';
@@ -524,6 +542,52 @@ body.gl-failed .gl-fallback { display: block; }
     }
   }
 
+  /* Pointer reaction state: smoothed position, presence, sweep energy. */
+  let ptX = 0, ptY = 0, ptTX = 0, ptTY = 0;
+  let ptInside = false, ptPresence = 0, ptEnergy = 0, ptPrev = null;
+
+  function pointerUV(e){
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return null;
+    return [ (e.clientX - 0.5 * w) / h, (0.5 * h - e.clientY) / h ];
+  }
+
+  function pointerSet(e){
+    const p = pointerUV(e);
+    if (!p) return;
+    if (ptPrev) {
+      const d = Math.hypot(p[0] - ptPrev[0], p[1] - ptPrev[1]);
+      ptEnergy = Math.min(1, ptEnergy + d * 3.0);
+    }
+    ptPrev = p;
+    ptTX = p[0]; ptTY = p[1];
+    ptInside = true;
+  }
+
+  window.addEventListener('pointermove', pointerSet, { passive: true });
+  window.addEventListener('pointerdown', (e) => {
+    ptEnergy = Math.min(1, ptEnergy + 0.4);
+    pointerSet(e);
+  }, { passive: true });
+  document.documentElement.addEventListener('pointerleave', () => {
+    ptInside = false; ptPrev = null;
+  });
+  window.addEventListener('blur', () => { ptInside = false; ptPrev = null; });
+
+  function updatePointer(dt){
+    if (reduced) {
+      ptX = ptTX; ptY = ptTY; ptEnergy = 0;
+    } else {
+      const k = 1 - Math.exp(-dt * 10);
+      ptX += (ptTX - ptX) * k;
+      ptY += (ptTY - ptY) * k;
+      ptEnergy *= Math.exp(-dt * 2.2);
+    }
+    ptPresence += ((ptInside ? 1 : 0) - ptPresence) * (1 - Math.exp(-dt * 6));
+  }
+
+  function pointerForce(){ return ptPresence * (0.30 + 0.70 * ptEnergy); }
+
   let simTime = 0;
   let needsDraw = true;
   let frames = 0, fpsAcc = 0, fpsLast = 0;
@@ -532,6 +596,8 @@ body.gl-failed .gl-fallback { display: block; }
   function draw(){
     gl.uniform2f(uRes, canvas.width, canvas.height);
     gl.uniform1f(uT, simTime);
+    gl.uniform2f(uMouse, ptX, ptY);
+    gl.uniform1f(uForce, pointerForce());
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     if (errChecks < 5) {
       errChecks++;
@@ -545,7 +611,9 @@ body.gl-failed .gl-fallback { display: block; }
     if (!paused) {
       const delta = fpsLast ? now - fpsLast : 0;
       fpsLast = now;
-      simTime += Math.min(delta, 100) / 1000;
+      const dt = Math.min(delta, 100) / 1000;
+      simTime += dt;
+      updatePointer(dt);
       draw();
       frames++;
       fpsAcc += delta;
