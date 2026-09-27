@@ -89,17 +89,17 @@ canvas #gl          z1  fixed inset 0 — the scene (role="img" + aria-label)
 
 ## 5. The WebGL scene
 
-Fullscreen triangle, fragment shader (`#version 300 es`), `alpha:false`, DPR
-clamped, redraw every rAF. Layers painted back to front:
+Fullscreen triangle, fragment shader (`#version 300 es`), `alpha:false`,
+`depth:false`, `stencil:false` (no unused buffers), DPR clamped, redraw every
+rAF. Layers painted back to front:
 
 | # | Layer | Construction | Key constants |
 |---|---|---|---|
-| 1 | Deep-space haze | single noise tap, squared | `vec3(0.040,0.045,0.085) × haze²` |
-| 2 | Starfield | 2 parallax hash-grid layers, per-star twinkle, dimmed under curtains | scales `46 / 92`, thresholds `0.950 / 0.976` |
-| 3 | Aurora curtains | domain-warped `fbm4` + ray noise + vertical striation mask | band `smoothstep(0.45, 0.80)`, vertical mask `-0.34…-0.10` fading out `0.14…0.52`, striation `0.50 + 0.50×noise` |
-| 4 | Secondary band | single noise tap, narrow low-altitude mask | `smoothstep(0.62, 0.95)`, weight `×0.4` |
-| 5 | Earth limb | circle SDF at `(0,-2.2) r=1.85`; interior forced to black, atmosphere rim above | rim `exp(-ed·11.0)×0.70` tint + `exp(-ed·34.0)×0.50` spectral |
-| 6 | Finish | vignette → Reinhard-ish tonemap → gamma lift | vignette `0.38·dot`, `col/(1+0.55·col)`, `pow(col, 0.90)` |
+| 1 | Starfield | 2 parallax hash-grid layers, per-star twinkle, dimmed under curtains | scales `46 / 92`, thresholds `0.950 / 0.976` |
+| 2 | Aurora curtains | domain-warped `fbm3` + `fbm4` curtains + ray noise; striation *derived* from the same ray field | band `smoothstep(0.45, 0.80)` with `rays×0.10`, vertical mask `-0.34…-0.10` fading out `0.14…0.52`, striation `0.45 + 0.55×rays` |
+| 3 | Secondary band | derived from `warp + rays` — no extra tap, narrow low-altitude mask | `smoothstep(0.58, 0.95, warp×0.85 + rays×0.30)`, weight `×0.4` |
+| 4 | Earth limb | circle SDF at `(0,-2.2) r=1.85`; interior forced to black, atmosphere rim above | rim `exp(-ed·11.0)×0.70` tint + `exp(-ed·34.0)×0.50` spectral |
+| 5 | Finish | vignette → Reinhard-ish tonemap → gamma lift | vignette `0.38·dot`, `col/(1+0.55·col)`, `pow(col, 0.90)` |
 
 Palette inside the shader (linear-ish RGB literals — the only colors outside `:root`):
 
@@ -121,14 +121,14 @@ Two uniforms drive it: `mouse` (smoothed pointer in shader uv-space) and
 |---|---|---|
 | Depth parallax | `par = mouse × mforce × 0.02` — stars take `×0.5`, aurora `×1.0`, Earth `×0.85` | max ≈ 18px lean @1080p |
 | Cursor halo | `exp(-dist × 11.0) × mforce`, composited *before* the Earth mask so the planet occludes it | weight `×0.10` |
-| Ray boost | cursor field feeds the curtain band: `smoothstep(0.45, 0.80, curtains + rays×0.20 + mg×0.35)` | local band coverage swells while sweeping |
+| Ray boost | cursor field feeds the curtain band: `smoothstep(0.45, 0.80, curtains + rays×0.10 + mg×0.35)` | local band coverage swells while sweeping |
 | Core flare | aurora cores gain `aur × mg × 0.35` | transient, only near the pointer |
 
 JS side: position smoothed at τ ≈ 100ms, presence τ ≈ 170ms; sweep energy
 saturates after roughly a third of a screen-height of travel and decays at
 τ ≈ 450ms; `pointerdown` injects an instant pulse. Leaving the window fades
 influence to zero (the glow dissipates in place, it does not jump to center).
-Cost: one `exp` + scalar math — **noise budget stays 12 taps**.
+Cost: one `exp` + scalar math — **noise budget stays 8 taps**.
 Under `prefers-reduced-motion` the field snaps to the pointer with a constant
 `0.30 × presence` glow (no energy ramp); while paused, pointer reaction is
 frozen with the rest of the scene. Initial state (no pointer yet) renders
@@ -137,8 +137,10 @@ identically to the non-interactive shader.
 ### Shader performance rules (hard constraints)
 - `hash` is sin-free (Hoskins-style). Never reintroduce `fract(sin(dot(…)))` —
   it ran ~88× per pixel.
-- Total noise budget: **12 taps/pixel** (`haze 1 + warp 4 + curtains 4 + rays 1
-  + striation 1 + band2 1`). `fbm` is 4 octaves. Adding a layer means removing one.
+- Total noise budget: **8 taps/pixel** (`warp 3 + curtains 4 + rays 1`).
+  The striation and secondary band are *derived* from `rays`/`warp` — adding a
+  layer means removing a tap. The haze tap was removed (it contributed <1.5%
+  luminance); `warp` is 3 octaves, `curtains` stays 4 (the hero silhouette).
 - All `smoothstep` edges must be strictly increasing — reversed edges are
   undefined behavior in GLSL (two were caught and fixed during review).
 
@@ -148,10 +150,12 @@ The badge (`GPU · WebGL2 · Nfps`) reports a 1-second rolling measurement.
 
 | Mechanism | Rule |
 |---|---|
+| Context flags | `antialias:false, alpha:false, depth:false, stencil:false` — no unused render buffers |
 | Render scale start | `quality = 0.75` on HiDPI (≈1.5 effective DPR), `1.0` on 1× displays; hard cap DPR 2 |
 | Step down | 2 consecutive windows `< 59fps` → `quality × 0.8`, floor `0.5` |
+| Hard rescue | a single window `< 45fps` steps down immediately, 1500ms cooldown (weak GPUs reach the floor fast) |
 | Probe up | 8 consecutive windows `≥ 59.5fps` → `quality × 1.12`, cap `1.0` |
-| Cooldown / warm-up | 2500ms between changes; no changes in the first 3000ms (startup jank immunity) |
+| Cooldown / warm-up | 2500ms between normal changes; no changes in the first 3000ms (startup jank immunity) |
 | Reset points | Pause/Resume click resets FPS counters and streaks |
 | `gl.getError()` | first 5 draws only (each call can stall the pipeline) |
 | Compositor | no `backdrop-filter`, no CSS blur over the canvas; zero box-shadows |

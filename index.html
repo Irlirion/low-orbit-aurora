@@ -337,7 +337,7 @@ body.gl-failed .gl-fallback { display: block; }
   const canvas = document.getElementById('gl');
   const statusEl = document.getElementById('gpu-status');
   const toggleEl = document.getElementById('motion-toggle');
-  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' });
+  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, powerPreference: 'high-performance' });
 
   const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let paused = reduced;
@@ -379,6 +379,11 @@ body.gl-failed .gl-fallback { display: block; }
     return mix(mix(hash(i), hash(i+vec2(1.0,0.0)), u.x),
                mix(hash(i+vec2(0.0,1.0)), hash(i+vec2(1.0,1.0)), u.x), u.y);
   }
+  float fbm3(vec2 p){
+    float v = 0.0, a = 0.5;
+    for(int i=0;i<3;i++){ v += a*noise(p); p = p*2.03 + vec2(11.3, 7.1); a *= 0.5; }
+    return v;
+  }
   float fbm4(vec2 p){
     float v = 0.0, a = 0.5;
     for(int i=0;i<4;i++){ v += a*noise(p); p = p*2.03 + vec2(11.3, 7.1); a *= 0.5; }
@@ -410,26 +415,25 @@ body.gl-failed .gl-fallback { display: block; }
     vec2 uvEar  = uv + par * 0.85;
     float mg = exp(-length(uv - mouse) * 11.0) * mforce;
 
-    /* deep-space base + faint haze (single noise tap) */
+    /* pure void base — haze tap removed (contributed <1.5% luminance) */
     vec3 col = vec3(0.0);
-    float haze = noise(uv*1.3 + vec2(time*0.010, time*0.004));
-    col += vec3(0.040, 0.045, 0.085) * haze * haze;
 
     /* starfield, two parallax layers */
     float st = starLayer(uvStar, 46.0, 0.950, 1.0) * 1.0
              + starLayer(uvStar + vec2(37.2, 11.9), 92.0, 0.976, 0.75);
 
-    /* aurora curtains */
-    float warp = fbm4(vec2(uvAur.x*1.15 + time*0.020, time*0.030));
+    /* aurora curtains — 8 noise taps total (warp 3 + curtains 4 + rays 1);
+       striation and the secondary band are derived, never extra taps */
+    float warp = fbm3(vec2(uvAur.x*1.15 + time*0.020, time*0.030));
     float curtains = fbm4(vec2(uvAur.x*2.5 + warp*1.9, uvAur.y*0.45 - time*0.016));
-    float rays = noise(vec2((uvAur.x + warp*0.35)*24.0, time*0.06 + uvAur.y*1.4));
-    float band = smoothstep(0.45, 0.80, curtains + rays*0.20 + mg*0.35);
+    float rays = noise(vec2((uvAur.x + warp*0.35)*28.0, time*0.06 + uvAur.y*1.4));
+    float band = smoothstep(0.45, 0.80, curtains + rays*0.10 + mg*0.35);
     float vert = smoothstep(-0.34, -0.10, uvAur.y) * (1.0 - smoothstep(0.14, 0.52, uvAur.y));
-    float striate = 0.50 + 0.50 * noise(vec2((uvAur.x + warp*0.4)*34.0, time*0.05));
+    float striate = 0.45 + 0.55 * rays;
     float aur = clamp(band * vert * striate, 0.0, 1.0);
 
-    /* second, thinner band below the main curtain */
-    float band2 = smoothstep(0.62, 0.95, noise(vec2(uvAur.x*3.2 - warp*1.3 + 41.0, uvAur.y*0.6 + time*0.012)));
+    /* second, thinner band below the main curtain — derived from warp + rays */
+    float band2 = smoothstep(0.58, 0.95, warp*0.85 + rays*0.30);
     float vert2 = smoothstep(-0.30, -0.20, uvAur.y) * (1.0 - smoothstep(-0.08, 0.06, uvAur.y));
     float aur2 = band2 * vert2;
 
@@ -519,11 +523,12 @@ body.gl-failed .gl-fallback { display: block; }
   }
 
   function adaptQuality(fps, now){
-    if (now - lastQualityChange < 2500) return;
+    const hard = fps < 45; /* critical — step down on a single window */
+    if (now - lastQualityChange < (hard ? 1500 : 2500)) return;
     if (fps < 59) {
       lowWindows++;
       goodWindows = 0;
-      if (lowWindows >= 2 && quality > 0.5) {
+      if ((hard || lowWindows >= 2) && quality > 0.5) {
         quality = Math.max(0.5, quality * 0.8);
         lastQualityChange = now;
         lowWindows = 0;
